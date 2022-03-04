@@ -1,5 +1,5 @@
 
----- MODULE tlcFolds ---- 
+---- MODULE tlcApalache ---- 
 
 EXTENDS Integers, FiniteSets, Sequences
 
@@ -24,4 +24,14 @@ RECURSIVE FoldSeq(_,_,_)
 FoldSeq( Op(_,_), v, seq ) == IF seq = <<>>
                               THEN v
                               ELSE FoldSeq( Op, Op(v,Head(seq)), Tail(seq) )
+
+(*****************************************************************************)
+(* Convert a set of pairs to a function.                                     *)
+(* Apalache implements a more efficient encoding than the one below.         *)
+(*****************************************************************************)
+SetAsFun(S) ==
+    LET Dom == { x: <<x, y>> \in S }
+        Rng == { y: <<x, y>> \in S }
+    IN
+    [ x \in Dom |-> CHOOSE y \in Rng: <<x, y>> \in S ]
 ====
