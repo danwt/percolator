@@ -1,4 +1,4 @@
-# chain-replication
+# percolator
 
 TLA+ for [Percolator](https://research.google/pubs/pub36726/).
 
