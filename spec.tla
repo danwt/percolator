@@ -39,7 +39,7 @@ VARIABLES
     \* @type: (IID, TIME) => TIME; Points to time of data, or 0 for Null
     write,
     \* @type: Set(WRITE_TRANSACTION);
-    writes
+    write_transactions
 
 DatasForItem(iid)  == {x \in DOMAIN data  : x[1] = iid}
 LocksForItem(iid)  == {x \in DOMAIN lock  : x[1] = iid}
@@ -55,7 +55,7 @@ Init ==
     data = [x \in IIDS \X {0} |-> NullInt]
     lock = [x \in IIDS \X {0} |-> NullInt]
     write = [x \in IIDS \X {0} |-> NullInt]
-    writes = {}
+    write_transactions = {}
 
 Write(t) ==
     LET
@@ -66,13 +66,13 @@ Write(t) ==
             /\ UNCHANGED data
             /\ UNCHANGED lock
             /\ UNCHANGED write
-            /\ writes' = writes \ {t}
+            /\ write_transactions' = write_transactions \ {t}
         ELSE
             (*Succeed*)
             /\ data' = [data EXCEPT ![iid, t.start] = t.value[iid]]
             /\ lock' = [lock EXCEPT ![iid, t.start] = t.primary]
             /\ UNCHANGED write,
-            /\ writes' = (writes \ {t}) \cup {[t EXCEPT !.prewritten = @ \cup {iid}]},
+            /\ write_transactions' = (write_transactions \ {t}) \cup {[t EXCEPT !.prewritten = @ \cup {iid}]},
 
     Commit(iid) ==
         IF ~lock[iid, t.start]
@@ -81,13 +81,13 @@ Write(t) ==
             /\ UNCHANGED data
             /\ UNCHANGED lock
             /\ UNCHANGED write
-            /\ writes' = writes \ {t}
+            /\ write_transactions' = write_transactions \ {t}
         ELSE
             (*Succeed*)
             /\ UNCHANGED data,
             /\ lock' = [lock EXCEPT ![iid, t.start] = NullInt],
             /\ write' = [write EXCEPT ![iid, time] = t.start],
-            /\ writes' = writes \ {t}
+            /\ write_transactions' = write_transactions \ {t}
 
     IN
     CASE 
@@ -96,9 +96,8 @@ Write(t) ==
                                                     -> Prewrite(t.primary)
     []
     (*Try lock a non primary*)
-        \E iid \in t.iids : 
-            /\ t.primary \in t.prewritten
-            /\ iid \notin t.prewritten
+        /\ t.primary \in t.prewritten
+        /\ \E iid \in t.iids : iid \notin t.prewritten
                                                     -> Prewrite(iid)
     []
     (*Try commit the primary*)
@@ -112,7 +111,7 @@ TODO:
     Ensure use of nullint does not collide anywhere.
     Fix time merger (should merge @@ with new time to grow functions)
 
-    Explain how the logic to finish all the writes is moved from the write transaction and put entirely on the rollforward.
+    Explain how the logic to finish all the write_transactions is moved from the write transaction and put entirely on the rollforward.
     typecheck ;)
 *)
 
@@ -122,14 +121,14 @@ Read(iid) ==
         /\ UNCHANGED data
         /\ UNCHANGED lock
         /\ UNCHANGED write
-        /\ UNCHANGED writes
+        /\ UNCHANGED write_transactions
     DoRead == DoNothing
         \* ... could do something with the latest write time in range(0, time), for verification purposes
     Rollback == 
         /\ UNCHANGED data' = [data EXCEPT ![iid, time] = NullInt]
         /\ lock' = [lock EXCEPT ![iid, time] = NullInt]
         /\ UNCHANGED write
-        /\ UNCHANGED writes
+        /\ UNCHANGED write_transactions
     RollForward(primaryIID) == 
         LET 
             CommitTime == 
@@ -140,7 +139,7 @@ Read(iid) ==
         /\ UNCHANGED data
         /\ lock' = [lock EXCEPT ![iid, time] = NullInt]
         /\ write' = [write EXCEPT ![iid, CommitTime] = time]
-        /\ UNCHANGED writes
+        /\ UNCHANGED write_transactions
 
     IN
     CASE
@@ -183,7 +182,7 @@ NewWriteTransaction(p) ==
     /\ UNCHANGED lock
     /\ UNCHANGED write
     /\ \E f \in WRITES : 
-        writes' = writes \cup {[
+        write_transactions' = write_transactions \cup {[
             pid |-> p,
             start|-> time,
             value |-> f,
@@ -196,19 +195,19 @@ WriterCrash(p, t) ==
     /\ UNCHANGED data
     /\ UNCHANGED lock
     /\ UNCHANGED write
-    /\ writes' = writes \ {t}
+    /\ write_transactions' = write_transactions \ {t}
 
 Next == 
     /\ time' = time + 1
     /\ 
         \/ \E p \in PIDS : 
-           \/ \E t \in writes :
+           \/ \E t \in write_transactions :
                /\ t.pid = p
                /\ Write(t)
            \/
-               /\ ~(\E t \in writes : t.pid = p)
+               /\ ~(\E t \in write_transactions : t.pid = p)
                /\ NewWriteTransaction(p)
-           \/ \E t \in writes :
+           \/ \E t \in write_transactions :
                /\ t.pid = p
                /\ WriterCrash(p, t)
         \/ \E iid \in IIDS: Read(iid)
