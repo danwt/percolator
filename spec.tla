@@ -42,7 +42,7 @@ IIDS == 1..2
 PIDS == {p0, p1, p2}
 PIDSymmetry == Permutations(PIDS)
 WRITES == {SetAsFun(S) : S \in SUBSET (IIDS \X DATA_VALUES)}
-MAX_TIME == 7
+MAX_TIME == 8
 TIME_RANGE == 1..MAX_TIME
 KEYS == IIDS \X TIME_RANGE
 
@@ -96,7 +96,7 @@ NewReadTransaction(p) ==
         read_transactions' = read_transactions \cup {[
             pid |-> p,
             start |-> time,
-            iid |-> iiid
+            iid |-> iid
         ]}
 
 Write(t) ==
