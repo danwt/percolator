@@ -5,21 +5,35 @@ EXTENDS  Integers, Naturals, FiniteSets, Sequences, TLC, tlcApalache
 
 (*
 
-@typeAlias: PID = Int; Process ID.
-@typeAlias: IID = Int; Item ID.
-@typeAlias: VALUE = Int; Item value.
-@typeAlias: TIME = Int;
+    @typeAlias: PID = Int; Process ID.
+    @typeAlias: IID = Int; Item ID.
+    @typeAlias: VALUE = Int; Item value.
+    @typeAlias: TIME = Int;
 
-@typeAlias: WRITE_TRANSACTION = [
-    pid : PID,
-    start: TIME,
-    value : IID => VALUE,
-    iids : Set(IID),
-    primary : IID,
-    prewritten : Set(IID)
-];
+    @typeAlias: WRITE_TRANSACTION = [
+        pid : PID,
+        start: TIME,
+        value : IID => VALUE,
+        iids : Set(IID),
+        primary : IID,
+        prewritten : Set(IID)
+    ];
+
+    @typeAlias: READ_TRANSACTION = [
+        pid : PID,
+        start: TIME,
+        iid
+    ];
 
 *)
+
+CONSTANTS
+    \* @type PID;
+    p0,
+    \* @type PID;
+    p1,
+    \* @type PID;
+    p2
 
 NullInt == 0
 
@@ -28,6 +42,11 @@ IIDS == 1..3
 PIDS == {p0, p1, p2}
 PIDSymmetry == Permutations(PIDS)
 WRITES == {SetAsFun(S) : S \in SUBSET (IIDS \X DATA_VALUES)}
+MAX_TIME == 8
+TIME_RANGE == 1..MAX_TIME
+KEYS == IIDS \X TIME_RANGE
+
+Max(S) == CHOOSE x \in S : \A y \in S : y <= x
 
 VARIABLES
     \* @type: TIME;
@@ -39,23 +58,48 @@ VARIABLES
     \* @type: (IID, TIME) => TIME; Points to time of data, or 0 for Null
     write,
     \* @type: Set(WRITE_TRANSACTION);
-    write_transactions
+    write_transactions,
+    \* @type: Set(READ_TRANSACTION);
+    read_transactions
 
-DatasForItem(iid)  == {x \in DOMAIN data  : x[1] = iid}
-LocksForItem(iid)  == {x \in DOMAIN lock  : x[1] = iid}
-WritesForItem(iid) == {x \in DOMAIN write : x[1] = iid}
-
-IsLockedFrom(iid, t0) ==        \E x LocksForItem(iid)  : t0 <= x[2]
-IsWritFrom(iid, t0) ==          \E x WritesForItem(iid) : t0 <= x[2]
-IsLockedInRange(iid, t0, t1) == \E x LocksForItem(iid)  : t0 <= x[2] /\ x[2] <= t1
-IsWritInRange(iid, t0, t1) ==   \E x WritesForItem(iid) : t0 <= x[2] /\ x[2] <= t1
+IsLockedFrom(iid, t) ==         \E k \in {iid} \X TIME_RANGE : t <= k[2] /\ lock[k] # NullInt
+IsWritFrom(iid, t) ==           \E k \in {iid} \X TIME_RANGE : t <= k[2] /\ write[k] # NullInt
+IsLockedInRange(iid, t0, t1) == \E k \in {iid} \X TIME_RANGE : t0 <= k[2] /\ k[2] <= t1 /\ lock[k] # NullInt
+IsWritInRange(iid, t0, t1) ==   \E k \in {iid} \X TIME_RANGE : t0 <= k[2] /\ k[2] <= t1 /\ write[k] # NullInt
 
 Init == 
-    time = 1,
-    data = [x \in IIDS \X {0} |-> NullInt]
-    lock = [x \in IIDS \X {0} |-> NullInt]
-    write = [x \in IIDS \X {0} |-> NullInt]
-    write_transactions = {}
+    /\ time = 1
+    /\ data = [k \in KEYS |-> NullInt]
+    /\ lock = [k \in KEYS |-> NullInt]
+    /\ write = [k \in KEYS |-> NullInt]
+    /\ write_transactions = {}
+
+NewWriteTransaction(p) ==
+    /\ UNCHANGED data
+    /\ UNCHANGED lock
+    /\ UNCHANGED write
+    /\ \E f \in WRITES : 
+        write_transactions' = write_transactions \cup {[
+            pid |-> p,
+            start|-> time,
+            value |-> f,
+            iids |-> DOMAIN f,
+            primary |-> CHOOSE id \in DOMAIN f : TRUE,
+            prewritten |-> {}
+        ]}
+    /\ UNCHANGED read_transactions
+
+NewReadTransaction(p) ==
+    /\ UNCHANGED data
+    /\ UNCHANGED lock
+    /\ UNCHANGED write
+    /\ UNCHANGED write_transactions
+    /\ \E iid \in IIDS : 
+        read_transactions' = read_transactions \cup {[
+            pid |-> p,
+            start|-> time,
+            iid |-> iid
+        ]}
 
 Write(t) ==
     LET
@@ -71,8 +115,8 @@ Write(t) ==
             (*Succeed*)
             /\ data' = [data EXCEPT ![iid, t.start] = t.value[iid]]
             /\ lock' = [lock EXCEPT ![iid, t.start] = t.primary]
-            /\ UNCHANGED write,
-            /\ write_transactions' = (write_transactions \ {t}) \cup {[t EXCEPT !.prewritten = @ \cup {iid}]},
+            /\ UNCHANGED write
+            /\ write_transactions' = (write_transactions \ {t}) \cup {[t EXCEPT !.prewritten = @ \cup {iid}]}
 
     Commit(iid) ==
         IF ~lock[iid, t.start]
@@ -84,9 +128,9 @@ Write(t) ==
             /\ write_transactions' = write_transactions \ {t}
         ELSE
             (*Succeed*)
-            /\ UNCHANGED data,
-            /\ lock' = [lock EXCEPT ![iid, t.start] = NullInt],
-            /\ write' = [write EXCEPT ![iid, time] = t.start],
+            /\ UNCHANGED data
+            /\ lock' = [lock EXCEPT ![iid, t.start] = NullInt]
+            /\ write' = [write EXCEPT ![iid, time] = t.start]
             /\ write_transactions' = write_transactions \ {t}
 
     IN
@@ -104,114 +148,110 @@ Write(t) ==
         \A iid \in t.iids : iid \in t.prewritten
                                                     -> Commit(primary)
     
-(*
-TODO:
-    Is should change reads to come from a bank of running transactions with a start time instead of using 'time'.
-    Then I should sanity check, typecheck and check some atomicity properties.
-    Ensure use of nullint does not collide anywhere.
-    Fix time merger (should merge @@ with new time to grow functions)
-
-    Explain how the logic to finish all the write_transactions is moved from the write transaction and put entirely on the rollforward.
-    typecheck ;)
-*)
-
-Read(iid) ==
-    LET 
-    DoNothing ==
+Read(t) ==
+    LET
+    DoRead == 
+        \* ... could do something with the latest write time in range(0, time), for verification purposes
+        \* but I'll skip that as more interested in learning the algorithm than verifying it.
         /\ UNCHANGED data
         /\ UNCHANGED lock
         /\ UNCHANGED write
-        /\ UNCHANGED write_transactions
-    DoRead == DoNothing
-        \* ... could do something with the latest write time in range(0, time), for verification purposes
+        /\ read_transactions' = read_transactions \ {t}
     Rollback == 
-        /\ UNCHANGED data' = [data EXCEPT ![iid, time] = NullInt]
-        /\ lock' = [lock EXCEPT ![iid, time] = NullInt]
+        /\ data' = [data EXCEPT ![t.iid, t.start] = NullInt]
+        /\ lock' = [lock EXCEPT ![t.iid, t.start] = NullInt]
         /\ UNCHANGED write
-        /\ UNCHANGED write_transactions
+        /\ UNCHANGED read_transactions
     RollForward(primaryIID) == 
+        (*
+        We must know the IID of the primary in order to locate the entry in the write column
+        that commits the write. We take the time of that committing entry and use it to rollforward.
+        *)
         LET 
-            CommitTime == 
-            LET
-            CommitingWriteIndex == CHOOSE x \in {y \in WritesForItem(primaryIID) : write[y] = time}
-            IN CommitingWriteIndex[2]
+            CommitTime == CHOOSE ct \in TIME_RANGE : write[primaryIID, ct] = t.start
         IN
         /\ UNCHANGED data
-        /\ lock' = [lock EXCEPT ![iid, time] = NullInt]
-        /\ write' = [write EXCEPT ![iid, CommitTime] = time]
-        /\ UNCHANGED write_transactions
-
+        /\ lock' = [lock EXCEPT ![t.iid, t.start] = NullInt]
+        /\ write' = [write EXCEPT ![t.iid, CommitTime] = t.start]
+        /\ UNCHANGED read_transactions
+    DoNothing == 
+        /\ UNCHANGED data
+        /\ UNCHANGED lock
+        /\ UNCHANGED write
+        /\ UNCHANGED read_transactions
     IN
     CASE
     (*Actually read*)
-        /\ ~IsLockedInRange(iid, 0, time)
-        /\ IsWritInRange(iid, 0, time)
+        /\ ~IsLockedInRange(t.iid, 1, t.start)
+        /\ IsWritInRange(t.iid, 1, t.start)
                                                     -> DoRead
     []
     (*
         Find a primary lock.
         Delete the lock and the data.
     *)
-        /\ lock[iid, time] = iid 
+        /\ lock[t.iid, t.start] = t.iid 
                                                     -> RollBack
     []
     (*
-        Find a lock with a missing primary. The primary item has no data.
-        Delete the lock and the data.
+        Find a non primary lock pointing to deleted primary lock.
+        Delete the non primary lock and the data.
     *)
-        /\ lock[iid, time] # NullInt
-        /\ lock[iid, time] # iid
-        /\ lock[lock[iid, time]] = Nullint
-        /\ data[lock[iid, time]] = NullInt
+        /\ lock[t.iid, t.start] # NullInt
+        /\ lock[t.iid, t.start] # t.iid
+        /\ lock[lock[t.iid, t.start]] = Nullint
+        /\ data[lock[t.iid, t.start]] = NullInt
                                                     -> RollBack
     []
     (*
-        Find a lock with a missing primary. The primary item has data (then there is a write pointing to the data)
+        Find a non primary lock pointing to deleted primary lock.
+        The primary row has data (so there must be a write pointing to the data)
         Replace the lock with a write pointing to the data, at the commit time.
     *)
-        /\ lock[iid, time] # NullInt
-        /\ lock[iid, time] # iid
-        /\ lock[lock[iid, time]] = Nullint
-        /\ data[lock[iid, time]] # NullInt
-                                                    -> RollForward(lock[iid, time])
+        /\ lock[t.iid, t.start] # NullInt
+        /\ lock[t.iid, t.start] # t.iid
+        /\ lock[lock[t.iid, t.start]] = Nullint
+        /\ data[lock[t.iid, t.start]] # NullInt
+                                                    -> RollForward(lock[t.iid, t.start])
 
-    [] OTHER -> DoNothing \* If find lock with a primary, for example.
-
-NewWriteTransaction(p) ==
-    /\ UNCHANGED data
-    /\ UNCHANGED lock
-    /\ UNCHANGED write
-    /\ \E f \in WRITES : 
-        write_transactions' = write_transactions \cup {[
-            pid |-> p,
-            start|-> time,
-            value |-> f,
-            iids |-> DOMAIN f,
-            primary |-> CHOOSE id \in DOMAIN f,
-            prewritten |-> {}
-        ]}
+    [] OTHER -> DoNothing \* If find non primary lock pointing to a non-deleted primary lock, for example.
 
 WriterCrash(p, t) == 
     /\ UNCHANGED data
     /\ UNCHANGED lock
     /\ UNCHANGED write
     /\ write_transactions' = write_transactions \ {t}
+    /\ UNCHANGED read_transactions
+
+NextTransition == 
+    \E p \in PIDS : 
+        \/
+            /\ ~(\E t \in write_transactions : t.pid = p)
+            /\ NewWriteTransaction(p)
+        \/
+            /\ ~(\E t \in  read_transactions : t.pid = p)
+            /\ NewReadTransaction(p)
+        \/ \E t \in write_transactions :
+            /\ t.pid = p
+            /\ Write(t)
+            /\ UNCHANGED  read_transactions
+        \/ \E t \in  read_transactions :
+            /\ t.pid = p
+            /\ Read(t)
+            /\ UNCHANGED write_transactions
+        \/ \E t \in write_transactions :
+            /\ t.pid = p
+            /\ WriterCrash(p, t)
+        \* Not much point in modeling reader crashes
 
 Next == 
-    /\ time' = time + 1
-    /\ 
-        \/ \E p \in PIDS : 
-           \/ \E t \in write_transactions :
-               /\ t.pid = p
-               /\ Write(t)
-           \/
-               /\ ~(\E t \in write_transactions : t.pid = p)
-               /\ NewWriteTransaction(p)
-           \/ \E t \in write_transactions :
-               /\ t.pid = p
-               /\ WriterCrash(p, t)
-        \/ \E iid \in IIDS: Read(iid)
-    
-Inv == Agreement
+    \/ /\ time < MAX_TIME
+       /\ time' = time + 1
+       /\ NextTransition
+    (*Loop back to allow TLC to exhaust the state space.*)
+    \/ /\ time = MAX_TIME
+       /\ Init
+
+
 
 ====
