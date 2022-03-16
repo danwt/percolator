@@ -1,7 +1,7 @@
 ---- MODULE spec ----
 
-\* EXTENDS  Integers, FiniteSets, Sequences, TLC, Apalache
-EXTENDS  Integers, Naturals, FiniteSets, Sequences, TLC, tlcApalache
+EXTENDS  Integers, FiniteSets, Sequences, TLC, Apalache
+\* EXTENDS  Integers, Naturals, FiniteSets, Sequences, TLC, tlcApalache
 
 (*
 
@@ -12,7 +12,7 @@ EXTENDS  Integers, Naturals, FiniteSets, Sequences, TLC, tlcApalache
 
     @typeAlias: WRITE_TRANSACTION = [
         pid : PID,
-        start: TIME,
+        start : TIME,
         value : IID => VALUE,
         iids : Set(IID),
         primary : IID,
@@ -21,18 +21,18 @@ EXTENDS  Integers, Naturals, FiniteSets, Sequences, TLC, tlcApalache
 
     @typeAlias: READ_TRANSACTION = [
         pid : PID,
-        start: TIME,
-        iid
+        start : TIME,
+        iid : IID
     ];
 
 *)
 
 CONSTANTS
-    \* @type PID;
+    \* @type: PID;
     p0,
-    \* @type PID;
+    \* @type: PID;
     p1,
-    \* @type PID;
+    \* @type: PID;
     p2
 
 NullInt == 0
@@ -42,11 +42,24 @@ IIDS == 1..3
 PIDS == {p0, p1, p2}
 PIDSymmetry == Permutations(PIDS)
 WRITES == {SetAsFun(S) : S \in SUBSET (IIDS \X DATA_VALUES)}
-MAX_TIME == 8
+MAX_TIME == 6
 TIME_RANGE == 1..MAX_TIME
 KEYS == IIDS \X TIME_RANGE
 
-Max(S) == CHOOSE x \in S : \A y \in S : y <= x
+WriteTransaction(p,s,v,i,pri,pre) == [
+        pid |-> p,
+        start |-> s,
+        value |->  v,
+        iids |-> i,
+        primary |-> pri, 
+        prewritten |-> pre
+    ]
+
+ReadTransaction(p,s,i) == [
+        pid |-> p,
+        start |-> s,
+        iid |-> i
+    ]
 
 VARIABLES
     \* @type: TIME;
@@ -73,6 +86,7 @@ Init ==
     /\ lock = [k \in KEYS |-> NullInt]
     /\ write = [k \in KEYS |-> NullInt]
     /\ write_transactions = {}
+    /\ read_transactions = {}
 
 NewWriteTransaction(p) ==
     /\ UNCHANGED data
@@ -81,23 +95,21 @@ NewWriteTransaction(p) ==
     /\ \E f \in WRITES : 
         write_transactions' = write_transactions \cup {[
             pid |-> p,
-            start|-> time,
+            start |-> time,
             value |-> f,
             iids |-> DOMAIN f,
             primary |-> CHOOSE id \in DOMAIN f : TRUE,
             prewritten |-> {}
         ]}
-    /\ UNCHANGED read_transactions
 
 NewReadTransaction(p) ==
     /\ UNCHANGED data
     /\ UNCHANGED lock
     /\ UNCHANGED write
-    /\ UNCHANGED write_transactions
     /\ \E iid \in IIDS : 
         read_transactions' = read_transactions \cup {[
             pid |-> p,
-            start|-> time,
+            start |-> time,
             iid |-> iid
         ]}
 
@@ -141,12 +153,16 @@ Write(t) ==
     []
     (*Try lock a non primary*)
         /\ t.primary \in t.prewritten
-        /\ \E iid \in t.iids : iid \notin t.prewritten
-                                                    -> Prewrite(iid)
+        /\ t.iids \ t.prewritten # {}
+                                                    -> 
+                                                    LET 
+                                                    iid == CHOOSE iid \in (t.iids \ t.prewritten) : TRUE
+                                                    IN
+                                                    Prewrite(iid)
     []
     (*Try commit the primary*)
         \A iid \in t.iids : iid \in t.prewritten
-                                                    -> Commit(primary)
+                                                    -> Commit(t.primary)
     
 Read(t) ==
     LET
@@ -157,7 +173,7 @@ Read(t) ==
         /\ UNCHANGED lock
         /\ UNCHANGED write
         /\ read_transactions' = read_transactions \ {t}
-    Rollback == 
+    RollBack == 
         /\ data' = [data EXCEPT ![t.iid, t.start] = NullInt]
         /\ lock' = [lock EXCEPT ![t.iid, t.start] = NullInt]
         /\ UNCHANGED write
@@ -199,7 +215,7 @@ Read(t) ==
     *)
         /\ lock[t.iid, t.start] # NullInt
         /\ lock[t.iid, t.start] # t.iid
-        /\ lock[lock[t.iid, t.start]] = Nullint
+        /\ lock[lock[t.iid, t.start]] = NullInt
         /\ data[lock[t.iid, t.start]] = NullInt
                                                     -> RollBack
     []
@@ -210,7 +226,7 @@ Read(t) ==
     *)
         /\ lock[t.iid, t.start] # NullInt
         /\ lock[t.iid, t.start] # t.iid
-        /\ lock[lock[t.iid, t.start]] = Nullint
+        /\ lock[lock[t.iid, t.start]] = NullInt
         /\ data[lock[t.iid, t.start]] # NullInt
                                                     -> RollForward(lock[t.iid, t.start])
 
@@ -228,13 +244,15 @@ NextTransition ==
         \/
             /\ ~(\E t \in write_transactions : t.pid = p)
             /\ NewWriteTransaction(p)
+            /\ UNCHANGED read_transactions
         \/
-            /\ ~(\E t \in  read_transactions : t.pid = p)
+            /\ ~(\E t \in read_transactions : t.pid = p)
             /\ NewReadTransaction(p)
+            /\ UNCHANGED write_transactions
         \/ \E t \in write_transactions :
             /\ t.pid = p
             /\ Write(t)
-            /\ UNCHANGED  read_transactions
+            /\ UNCHANGED read_transactions
         \/ \E t \in  read_transactions :
             /\ t.pid = p
             /\ Read(t)
@@ -242,7 +260,6 @@ NextTransition ==
         \/ \E t \in write_transactions :
             /\ t.pid = p
             /\ WriterCrash(p, t)
-        \* Not much point in modeling reader crashes
 
 Next == 
     \/ /\ time < MAX_TIME
@@ -251,7 +268,5 @@ Next ==
     (*Loop back to allow TLC to exhaust the state space.*)
     \/ /\ time = MAX_TIME
        /\ Init
-
-
 
 ====
