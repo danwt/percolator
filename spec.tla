@@ -1,14 +1,20 @@
 ---- MODULE spec ----
 
-EXTENDS  Integers, FiniteSets, Sequences, TLC, Apalache
-\* EXTENDS  Integers, Naturals, FiniteSets, Sequences, TLC, tlcApalache
+\* EXTENDS  Integers, FiniteSets, Sequences, TLC, Apalache
+EXTENDS  Integers, Naturals, FiniteSets, Sequences, TLC, tlcApalache
 
 (*
 
-    @typeAlias: PID = Int; Process ID.
-    @typeAlias: IID = Int; Item ID.
-    @typeAlias: VALUE = Int; Item value.
+    @typeAlias: PID = Int;
+    @typeAlias: IID = Int;
+    @typeAlias: VALUE = Int;
     @typeAlias: TIME = Int;
+
+    @typeAlias: READ_TRANSACTION = [
+        pid : PID,
+        start : TIME,
+        iid : IID
+    ];
 
     @typeAlias: WRITE_TRANSACTION = [
         pid : PID,
@@ -17,12 +23,6 @@ EXTENDS  Integers, FiniteSets, Sequences, TLC, Apalache
         iids : Set(IID),
         primary : IID,
         prewritten : Set(IID)
-    ];
-
-    @typeAlias: READ_TRANSACTION = [
-        pid : PID,
-        start : TIME,
-        iid : IID
     ];
 
 *)
@@ -37,29 +37,14 @@ CONSTANTS
 
 NullInt == 0
 
-DATA_VALUES == 1..3
-IIDS == 1..3
+DATA_VALUES == 1..2
+IIDS == 1..2
 PIDS == {p0, p1, p2}
 PIDSymmetry == Permutations(PIDS)
 WRITES == {SetAsFun(S) : S \in SUBSET (IIDS \X DATA_VALUES)}
-MAX_TIME == 6
+MAX_TIME == 7
 TIME_RANGE == 1..MAX_TIME
 KEYS == IIDS \X TIME_RANGE
-
-WriteTransaction(p,s,v,i,pri,pre) == [
-        pid |-> p,
-        start |-> s,
-        value |->  v,
-        iids |-> i,
-        primary |-> pri, 
-        prewritten |-> pre
-    ]
-
-ReadTransaction(p,s,i) == [
-        pid |-> p,
-        start |-> s,
-        iid |-> i
-    ]
 
 VARIABLES
     \* @type: TIME;
@@ -93,14 +78,15 @@ NewWriteTransaction(p) ==
     /\ UNCHANGED lock
     /\ UNCHANGED write
     /\ \E f \in WRITES : 
-        write_transactions' = write_transactions \cup {[
-            pid |-> p,
-            start |-> time,
-            value |-> f,
-            iids |-> DOMAIN f,
-            primary |-> CHOOSE id \in DOMAIN f : TRUE,
-            prewritten |-> {}
-        ]}
+        \E primary \in DOMAIN f:
+            write_transactions' = write_transactions \cup {[
+                pid |-> p,
+                start |-> time,
+                value |-> f,
+                iids |-> DOMAIN f,
+                primary |-> primary,
+                prewritten |-> {}
+            ]}
 
 NewReadTransaction(p) ==
     /\ UNCHANGED data
@@ -110,7 +96,7 @@ NewReadTransaction(p) ==
         read_transactions' = read_transactions \cup {[
             pid |-> p,
             start |-> time,
-            iid |-> iid
+            iid |-> iiid
         ]}
 
 Write(t) ==
@@ -131,7 +117,7 @@ Write(t) ==
             /\ write_transactions' = (write_transactions \ {t}) \cup {[t EXCEPT !.prewritten = @ \cup {iid}]}
 
     Commit(iid) ==
-        IF ~lock[iid, t.start]
+        IF lock[iid, t.start] = NullInt
         THEN 
             (*Abort*)
             /\ UNCHANGED data
@@ -267,6 +253,11 @@ Next ==
        /\ NextTransition
     (*Loop back to allow TLC to exhaust the state space.*)
     \/ /\ time = MAX_TIME
-       /\ Init
+       /\ time' = 1
+       /\ data' = [k \in KEYS |-> NullInt]
+       /\ lock' = [k \in KEYS |-> NullInt]
+       /\ write' = [k \in KEYS |-> NullInt]
+       /\ write_transactions' = {}
+       /\ read_transactions' = {}
 
 ====
